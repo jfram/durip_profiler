@@ -110,7 +110,10 @@ void loop() {  // each profile is a loop
   Serial.print("Sent: ");   Serial.println(cmd);   dataFile.print("Sent: "); dataFile.println(cmd);    
   Serial.print("Response: "); Serial.println(str); dataFile.print("Response: "); dataFile.println(str); 
 
-  // cmd="s r0x24 21";
+  cmd="s r0x24 21"; // initiate servo position mode
+  mySerial.print(cmd+"\n");
+  float up_velocity = speed*cpm; // 
+  cmd="s r0xca " + String(up_velocity);
   // go up at high speed using position mode (21)
   //  experiment with speed
   //  experiment with saving
