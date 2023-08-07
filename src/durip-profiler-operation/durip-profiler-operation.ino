@@ -114,6 +114,7 @@ void loop() {  // each profile is a loop
   mySerial.print(cmd+"\n");
   float up_velocity = speed*cpm; // 
   cmd="s r0xca " + String(up_velocity);
+  
   // go up at high speed using position mode (21)
   //  experiment with speed
   //  experiment with saving
