@@ -1,187 +1,329 @@
 /*
-  DURIP profiler operation by Jonathan Fram. Based on Blink without Delay
-  See SoftwareSerialExampleDURIP.ino
+  DURIP profiler operation by Andrew Scherer and Jon Fram.
 */
 
-//****INCLUDED LIBRARIES*********
-#include "RTClib.h"
+#include <RTClib.h>
 #include <SPI.h>
 #include <SD.h>
-#include <SoftwareSerial.h>
 
-// Constants
-const int waterDepth = 25;
-const int speed = 1; // m/s
-const int cpm = 1000; // counts / meter
-const int pinBrake = 2;  // toggle the Brake
-const int pinMotor = 3;  // toggle the Motor
-const long interval = 10*1000;  // interval at which to profile (milliseconds)
-const int chipSelect = 4; //10; // for logging to the SD card
 
-// Variables
-DateTime now = DateTime(2023, 7, 9, 12,0, 0); 
-String fileName="start2.txt"; 
+// include water depth, velocity, between profile times, and surface wait time as parameters
+// slow down last 2 meters on the way back down 
+// up speed = 1m/s
+// down speed = 0.15 m/s
+// last 2 meters less than that
+//
+//
+//
+//
+
+
+DateTime now = DateTime(); 
+char fileName[20]; 
 File dataFile; 
-RTC_DS3231 rtc; // RTC_PCF8523 rtc; // real time clock board type
-String str="";
-String cmd="";
-SoftwareSerial mySerial(9,8); // RX, TX to the winch
-int cnt=0;
-int SDworks=1; // set to zero during testing to reduce wear and tear on the SD card
-int RTCworks=0; 
 
-void setup() {
-  // set the digital pin as output:
-  pinMode(pinBrake, OUTPUT);
-  pinMode(pinMotor, OUTPUT);
-  
-  Serial.begin(9600); // #ifndef ESP8266
-  while (!Serial); {  // this is to the main IO serial monitor.
-   ; 
-  } // wait for serial port to connect. Needed for native USB  // #endif
-  Serial.println("Arduino serial port is ready");
+const byte waterDepth = 25;
+const byte speed = 10;               // m/s
+const int cpm = 1000;                // counts / meter
+const int accel = cpm*speed;         // 1 m/s^2 accel/decel rate
+const int upVel = cpm*speed;         // 1 m/s upwards velocity
+const int downVel = cpm*speed;       // 0.5 m/s downwards velocity
+const long interval = 10*1000;       // interval at which to profile (milliseconds)
+long curPos= 0;
+long botPos = -20000;
+long surPos = 10000;
+long moveStatus;
 
-  // set time to computer time , pcf8523 in RTClib. Does not need to be redone because board has a battery. Just verify occassionally.
-  if (! rtc.begin()) {
-   Serial.println("Couldn't find RTC");
-    Serial.flush();
-    while (1) delay(10);
-  }
-  if (rtc.lostPower()) { // ! rtc.initialized() || 
-    Serial.print("RTC is NOT initialized, let's set the time!");
-    Serial.println();
-    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-    delay(2000);
-  } // rtc.start();
-  Serial.println("Realtime clock is ready.");
+RTC_DS3231 rtc;                      // real time clock board type
 
-  mySerial.begin(9600);
-  while (!mySerial) {
-    ;
-  }
-  Serial.println("SoftwareSerial port is ready.");
+const byte numChars = 32;            // no commands or responses should be longer than numChars
+char cmd[numChars];
+char res[numChars];
 
-  Serial.println("Initializing SD card... ");
-  if (!SD.begin(chipSelect)) {
-    Serial.println("SD card failed, or not present");
-    SDworks=0;
-  }
-  Serial.println("SD card initialized.");
-  
-  // turn relays off
-  digitalWrite(pinBrake, LOW);
-  digitalWrite(pinMotor, LOW);
-  Serial.println("setup function completed."); Serial.println("");
-  delay(4*1000); // pause before looping. Time before first profile. 
-}
+const byte pinBrake = 9;            // toggle the Brake
+const byte pinMotor = 8;            // toggle the Motor
 
-void loop() {  // each profile is a loop
-  Serial.print("elapsed sec: "); Serial.println(millis()/1000); // how long the script has been running
-  delay(3600*1000);
-  if (RTCworks>0) {
-    now = rtc.now();
-    // open text file with datayyyymmddHHMMSS.txt as the file name (datalogger example, chipSelect=10)
-    // too long. fileName = String("data"+String(now.year())+str2digits(now.month())+str2digits(now.day())+str2digits(now.hour())+str2digits(now.minute())+str2digits(now.second())+".txt");
-    fileName = String(str2digits(now.month())+str2digits(now.day())+str2digits(now.hour())+str2digits(now.minute())+".txt"); 
+int cnt=0;                           // count profiles
+byte SDworks=1;                      // 0 disables SD card
+byte RTCworks = 1;                   // 0 disables RTC
+const byte RTCsync = 0;              // set to 1 to force RTC to sync to computer clock
+
+const byte SDchipSelect = 53;        // SD card chip select pin
+
+
+void setup () {
+
+    pinMode(pinBrake, OUTPUT);
+    pinMode(pinMotor, OUTPUT);
+    // winch off during startup
+    digitalWrite(pinBrake, HIGH);
+    digitalWrite(pinMotor, HIGH);
+
+
+    // initialize serial ports 
+    Serial.begin(9600);     // for serial with computer
+    while (!Serial);
+    Serial1.begin(9600);    // for TX to winch
+    while(!Serial1);
+    Serial2.begin(9600);    // for RX from winch
+    while(!Serial2);    
+
+    // clear input buffer 
+    while (Serial2.available() > 0) {
+        Serial2.read();
     }
 
-  // open text file with mmddHHMM.txt as the file name
-  File dataFile = SD.open(fileName, FILE_WRITE); 
-  if (dataFile) {
-    Serial.print("Opened "); Serial.println(fileName); dataFile.print("Opened "); dataFile.println(fileName);
-  }   
-  if (!dataFile) {
-    Serial.print("Error opening "); Serial.println(fileName); dataFile.print("Error opening "); dataFile.println(fileName);
-  }   
-  if (RTCworks>0) {now=rtc.now(); Serial.println(now.timestamp(DateTime::TIMESTAMP_FULL)); dataFile.println(now.timestamp(DateTime::TIMESTAMP_FULL));}
-  Serial.println("Turn on winch.");  dataFile.println("Turn on winch.");
-  digitalWrite(pinBrake, LOW); // this will be setup to release the brake
-  Serial.print("Brake state: ");   Serial.println(digitalRead(pinBrake)); 
-  dataFile.print("Brake state: "); dataFile.println(digitalRead(pinBrake)); // to keep track of brake on. See SD DataLogger example
-  digitalWrite(pinMotor,LOW); // power up winch power relay
-  Serial.print("Motor state: ");     Serial.println(digitalRead(pinMotor)); 
-  dataFile.println("Motor state: "); dataFile.println(digitalRead(pinMotor)); // after this commands go to the winch, so monitor to SD
-  delay(4*1000); // pause to let the motor turn on
+    // setup real time clock
+    if (! rtc.begin()) {
+    Serial.println(F("Couldn't find RTC"));
+        Serial.flush();
+        while (1) delay(10);
+    }
+    if (rtc.lostPower()) { // ! rtc.initialized() || 
+        Serial.println(F("RTC lost power, syncing time..."));
+        rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+        delay(2000);
+    } // rtc.start();
+    if (RTCsync) {
+        Serial.println(F("Force syncing RTC..."));
+        rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+        delay(2000);
+    }
+    Serial.println(F("Realtime clock is ready."));
 
-  // set winch parameters
-  cmd="g r0x32"; 
-  mySerial.print(cmd+"\n"); 
-  str=mySerial.readString();
-  Serial.print("Sent: ");   Serial.println(cmd);   dataFile.print("Sent: "); dataFile.println(cmd);    
-  Serial.print("Response: "); Serial.println(str); dataFile.print("Response: "); dataFile.println(str); 
+    // setup sd card
+    Serial.println(F("Initializing SD card... "));
+    if (!SD.begin(SDchipSelect)) {
+        Serial.println(F("SD card failed, or not present"));
+        SDworks=0;
+    } else {
+        Serial.println(F("SD card initialized."));
+    }
 
-  cmd="s r0x24 21"; // initiate servo position mode
-  mySerial.print(cmd+"\n");
-  float up_velocity = speed*cpm; // 
-  cmd="s r0xca " + String(up_velocity);
-  
-  // go up at high speed using position mode (21)
-  //  experiment with speed
-  //  experiment with saving
-  // save status as climb (Calculate seconds to move. make a for loop so sample every second while moving)
-
-  //  if(mySerial.available()>0) {
-  //   Serial.println("available");
-  //   readline = mySerial.readString(); dataFile.println(readline);  Serial.println(readline);   
-  //    mySerial.println("s r0x24 21");     dataFile.println("s r0x24 21");
-  //    mySerial.println("s r0xca 400000"); dataFile.println("s r0xca 400000");
-  //    mySerial.println("t 1"); delay(10); dataFile.println("t 1");
-  //    now=rtc.now(); dataFile.println(now.timestamp(DateTime::TIMESTAMP_FULL));
-  //    mySerial.println("s r0xca 100000"); dataFile.println("s r0xca 100000");
-  //    mySerial.println("t 1"); delay(10); dataFile.println("t 1");
-  //    mySerial.println("s r0x24 30");     dataFile.println("s r0x24 30");   
-  //    now=rtc.now(); dataFile.println(now.timestamp(DateTime::TIMESTAMP_FULL));
-  //  }
-
-  // slowly unspool at surface
-  // get status as unspool
-  // reel in quickly
-  // get status as reel
-  // park slowly
-  // get status as park
-
-  // complete profile 
-  if (RTCworks>0) {now=rtc.now();} 
-  str=now.timestamp(DateTime::TIMESTAMP_FULL); 
-  Serial.println("Turn off winch."); dataFile.println("Turn off winch.");
-  digitalWrite(pinMotor,HIGH); // power down winch power relay
-  Serial.print("Motor state: ");     Serial.println(digitalRead(pinMotor)); 
-  dataFile.print("Motor state: "); dataFile.println(digitalRead(pinMotor)); // after this commands go to the winch, so monitor to SD
-  digitalWrite(pinBrake,HIGH); // re-engage brake
-  Serial.print("Brake state: ");     Serial.println(digitalRead(pinBrake)); 
-  dataFile.print("Brake state: "); dataFile.println(digitalRead(pinBrake)); // to keep track of brake on. See SD DataLogger example
-  Serial.print("Ended profile: "); dataFile.print("Ended profile: "); 
-  cnt=cnt+1; Serial.println(cnt); dataFile.println(cnt);
-  dataFile.close(); // close data file
-  if (!dataFile) {
-    Serial.println("Closed "+fileName); dataFile.println("Closed "+fileName);
-  }   
-  // Serial.println("past close.");   dataFile.println("past close.");
-  Serial.println("");
-  delay(interval);  // park until next profile. Eventually, 60 minutes - time to profile. 
-  // it appends if the file name is not changed.
+    // first profile delay 
+    delay(1000);
+    
 }
 
-//******FUNCTIONS**************
+void loop () {
 
-// Function that adds leading Zeros
-String str2digits(int number) {
-  String s;
-  s = "";
-  if (number >= 0 && number < 10) {
-    s="0";
-  }
-  s = s+String(number); 
-  return s;
+    // setup file name based on date and time
+    if (RTCworks>0) {
+        now = rtc.now();
+        sprintf_P(fileName, PSTR("%02d%02d%02d%02d.txt"), now.month(), now.day(), now.hour(), now.minute());
+        Serial.print(F("Opening: "));
+        Serial.println(fileName);
+    }
+
+    // open file
+    File dataFile = SD.open(fileName, FILE_WRITE); 
+    if (dataFile) {
+        Serial.print(F("Opened: ")); Serial.println(fileName); 
+        dataFile.print(F("Opened: ")); dataFile.println(fileName);
+    }   
+    if (!dataFile) {
+        Serial.print(F("Error opening: ")); Serial.println(fileName);
+    }   
+
+    // print timestamp into file and serial monitor
+    if (RTCworks>0) {
+        now=rtc.now();
+        Serial.println(now.timestamp(DateTime::TIMESTAMP_FULL));
+        dataFile.println(now.timestamp(DateTime::TIMESTAMP_FULL));
+    }
+
+
+    // power winch motor and brake
+    digitalWrite(pinBrake, LOW);
+    digitalWrite(pinMotor, LOW);
+    Serial.println(F("Winch on."));
+    dataFile.println(F("Winch on."));
+    delay(10000);
+
+    setUpMove(dataFile);                      // set move parameters
+
+    sprintf_P(cmd, PSTR("t 1\n"));            // initiate move
+    commandWinch(cmd, dataFile);              //
+
+    isMoving(dataFile);                       // loop checking if winch is still moving
+
+    moveSuccess(dataFile);                    // check if move was successful 
+
+    getPosition(dataFile);                    // get final position of move, save to curPos
+
+    // winch off at surface
+    digitalWrite(pinBrake, HIGH);
+    digitalWrite(pinMotor, HIGH);
+    Serial.print(F("Winch off.\n"));
+    dataFile.print(F("Winch off.\n"));
+    
+    // surface delay 
+    delay(5000);
+
+    // winch on for down move
+    digitalWrite(pinBrake, LOW);
+    digitalWrite(pinMotor, LOW);
+    Serial.print(F("Winch on.\n"));
+    dataFile.print(F("Winch on.\n"));
+    delay(10000);
+
+    setDownMove(dataFile);                      // set move parameters
+
+    sprintf_P(cmd, PSTR("t 1\n"));            // initiate move
+    commandWinch(cmd, dataFile);              //
+
+    isMoving(dataFile);                       // loop checking if winch is still moving
+
+    moveSuccess(dataFile);                    // check if move was successful 
+
+    getPosition(dataFile);                    // get final position of move, save to curPos
+
+    // winch off at bottom
+    digitalWrite(pinBrake, HIGH);
+    digitalWrite(pinMotor, HIGH);
+    Serial.print(F("Winch off.\n"));
+    dataFile.print(F("Winch off.\n"));
+
+
+    dataFile.print(F("Profile: "));
+    dataFile.println(cnt);
+    cnt ++;
+
+    dataFile.close(); // close data file
+    if (!dataFile) {
+        Serial.print(F("Closed ")); Serial.println(fileName);
+  }   
+
+    // bottom delay
+    delay(15000);
+    delay(1000);
+
 }
 
-// Function that sends a string and receives a response. NOT COMPLETED YET
-String commandwinch(String str) {
-  if (SDworks>0) { 
-    dataFile.println(str); 
-  }
-  Serial.println(str); 
-  mySerial.print(str+"\n"); 
-  str = mySerial.readString(); 
-  return str;
+void commandWinch(char *cmd, File &dataFile) {
+    // send command to winch
+    Serial1.print(cmd);
+    if (cmd != "\n") {
+        Serial.print(F("Sent: "));  Serial.print(cmd);
+        dataFile.print(F("Sent: ")); dataFile.print(cmd);
+    }
+
+    delay(1000);
+    // receive and save response to char array res
+    int idx = 0;
+    while (Serial2.available() > 0) {
+        res[idx] = Serial2.read();
+        idx++;
+        // overwrite last character if overflowing res memory
+        if (idx >= numChars) {
+            idx = numChars - 1;
+        }
+    }
+    res[idx] = '\0';    // set end string bit
+    idx = 0;            // reset idx
+    // clear input buffer 
+    while (Serial2.available() > 0) {
+        Serial2.read();
+    }
+    // write output
+    if (cmd != "\n") {
+        Serial.print(F("Response: ")); Serial.write(res);
+        dataFile.print(F("Response: ")); dataFile.write(res);
+    }
+    delay(1000);
+}
+
+
+void isMoving (File &dataFile) {
+    while (true) {
+        // send command as normal and get response (stored as res)
+        sprintf_P(cmd, PSTR("g r0xa0\n"));      
+        commandWinch(cmd, dataFile);
+        
+        char *strtokIdx;
+        strtokIdx = strtok(res, " ");              // remove "v" or "e" from response
+        strtokIdx = strtok(NULL, " ");             // get remaining long from response 
+        moveStatus = strtol(strtokIdx, NULL, 10);  // set value to moveStatus
+        // break loop if move complete (i.e., moveStatus==0)
+        if (moveStatus == 0) {
+            Serial.println(F("Move successful."));
+            dataFile.println(F("Move successful."));
+            break;
+        } 
+    }
+}
+
+void getPosition (File &dataFile) {
+    sprintf_P(cmd, PSTR("g r0x32\n"));     // send command requesting winch position
+    commandWinch(cmd, dataFile);           // response stored as res
+
+    char *strtokIdx;
+    strtokIdx = strtok(res, " ");          // remove "v" or "e" from response
+    strtokIdx = strtok(NULL, " ");         // get remaining integer from response 
+    curPos += strtol(strtokIdx, NULL, 10);  // save current position
+}
+
+void setUpMove (File &dataFile) {
+    commandWinch("\n", dataFile);                           // newline to clear winch serial buffer
+    sprintf_P(cmd, PSTR("s r0xc8 0\n"));                    // set absolute move, trapezoid profile
+    commandWinch(cmd, dataFile);
+    sprintf_P(cmd, PSTR("s r0x24 21\n"));                   // set position mode
+    commandWinch(cmd, dataFile);
+    sprintf_P(cmd, PSTR("s r0xcb %i\n"), upVel);            // set max velocity
+    commandWinch(cmd, dataFile);
+    sprintf_P(cmd, PSTR("s r0xcc %i\n"), accel);            // set acceleration
+    commandWinch(cmd, dataFile);
+    sprintf_P(cmd, PSTR("s r0xcd %i\n"), accel);            // set deceleration
+    commandWinch(cmd, dataFile);
+    sprintf_P(cmd, PSTR("s r0xca %ld\n"), surPos);          // set final position of up move 
+    commandWinch(cmd, dataFile);
+}
+
+void setDownMove (File &dataFile) {
+    commandWinch("\n", dataFile);                           // newline to clear winch serial buffer
+    sprintf_P(cmd, PSTR("s r0xc8 0\n"));                    // set absolute move, trapezoid profile
+    commandWinch(cmd, dataFile);
+    sprintf_P(cmd, PSTR("s r0x24 21\n"));                   // set position mode
+    commandWinch(cmd, dataFile);
+    sprintf_P(cmd, PSTR("s r0xcb %i\n"), downVel);          // set max velocity
+    commandWinch(cmd, dataFile);
+    sprintf_P(cmd, PSTR("s r0xcc %i\n"), accel);            // set acceleration
+    commandWinch(cmd, dataFile);
+    sprintf_P(cmd, PSTR("s r0xcd %i\n"), accel);            // set deceleration
+    commandWinch(cmd, dataFile);
+    sprintf_P(cmd, PSTR("s r0xca %ld\n"), botPos);          // set final position of down move 
+    commandWinch(cmd, dataFile);
+}
+
+void moveSuccess(File &dataFile) {
+    sprintf_P(cmd, PSTR("g r0xc9\n"));
+    commandWinch(cmd, dataFile);
+
+    char *strtokIdx;
+    strtokIdx = strtok(res, " ");                // remove "v" or "e" from response
+    strtokIdx = strtok(NULL, " ");               // get remaining integer from response 
+    moveStatus = strtol(strtokIdx, NULL, 10);    // save current position
+    if (moveStatus == 0) {
+        Serial.println(F("Move was successful."));
+        dataFile.println(F("Move was successful."));
+    } else if (moveStatus == 16385) {
+        Serial.println(F("Move was aborted."));
+        dataFile.println(F("Move was aborted."));
+        // perhaps do something if the move is aborted?
+        // attempt another move? 
+    } else {
+        Serial.println(F("Move status unknown."));
+        dataFile.println(F("Move was unknown."));        
+    }
+}
+
+void decodeResponse() {
+
+    char *strtokIdx;
+    strtokIdx = strtok(res, " ");          // remove "v" or "e" from response
+    strtokIdx = strtok(NULL, " ");         // get remaining integer from response 
+    curPos = strtol(strtokIdx, NULL, 10);  // save current position
+    // separate letter and number in winch response
+    // if letter is e, there was an error, return that
+    // if letter is v, get the response code for other function
 }
