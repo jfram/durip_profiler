@@ -14,16 +14,19 @@ File data_file;                                                         //
                                                                         //
 const long CPCM = 244;                                                  // counts/cm (empirically measured from 100 ft of line payout)
 const long SLOW_DEPTH = 2;                                              // slowing down for final 2 meters on move down
-long water_depth = 25;                                                  // water depth in meters
+int water_depth = 25;                                                   // water depth in meters
+int depth_factor = 3;                                                   // factor to multiply by water depth to get actual line payout
 long accel = CPCM*100L/10L;                                             // 1 m/s^2 accel/decel rate
 long up_vel = CPCM*100L*10L;                                            // 1 m/s upwards velocity
-long down_vel = CPCM*25L*10L;                                           // 0.25 m/s downwards velocity
-long slow_down_vel = CPCM*5L*10L;                                      // 0.05 m/s final down velocity
-long cur_pos = 0;                                                       // 
+long sur_vel = CPCM*25L*10L;                                            // 0.25 m/s surface velocity
+long down_vel = CPCM*25L*10L;                                           // 0.25 m/s initial down velocity
+long bot_vel = CPCM*5L*10L;                                             // 0.05 m/s final down velocity
+long cur_pos = 0;                                                       // stores position when winch turns off
                                                                         //
-long inter_pos = -water_depth*100L*CPCM+SLOW_DEPTH*100L*CPCM;           // move down at down_vel until reaching SLOW_DEPTH above bottom
-long bot_pos = -water_depth*100L*CPCM;                                  // last two meters will be descended slower
-long sur_pos = water_depth*100L*CPCM;                                   //
+long inter_sur_pos = water_depth*100L*CPCM;                             // move full speed up to water depth, then slow down at surface
+long sur_pos = water_depth*depth_factor*100L*CPCM;                      //
+long inter_bot_pos = -water_depth*depth_factor*100L*CPCM+SLOW_DEPTH*100L*CPCM;// move down at down_vel until reaching SLOW_DEPTH above bottom
+long bot_pos = -water_depth*depth_factor*100L*CPCM;                     // last two meters will be descended slower
                                                                         //
 long move_status;                                                       //
 bool last_move_success = true;                                          //
@@ -47,9 +50,9 @@ bool sd_works = true;                                                   // 0 dis
 bool rtc_works = true;                                                  // 0 disables RTC
 bool serial_setup = true;                                               // for setting up values via serial
 bool latch_fault = false;                                               // record latch faults
-const byte RTC_SYNC = 0;                                                // set to 1 to force RTC to sync to computer clock
+const bool RTC_SYNC = true;                                             // set to 1 to force RTC to sync to computer clock
 const byte SD_CHIP_SELECT = 53;                                         // SD card chip select pin
-const int RW_ADDRESS = 0;                                               // address to read/write user changeable vars to eeprom
+const int RW_ADDRESS = 0;                                               // address to read/write user modifiable vars to eeprom
 
 void commandWinch(char *cmd, File &data_file) {
     // send command to winch
@@ -95,9 +98,9 @@ void getPosition (File &data_file) {
 void setBotPos() {
     bot_pos = -cur_pos;                                                 // always return to 0 winch position
     if (abs(bot_pos) <= SLOW_DEPTH*100L*CPCM) {                         //
-        inter_pos = 0;                                                  // proceed only slow_down_vel if within SLOW_DEPTH above 0 position
+        inter_bot_pos = 0;                                                  // proceed only bot_vel if within SLOW_DEPTH above 0 position
     } else {                                                            //
-        inter_pos = -cur_pos + SLOW_DEPTH*100L*CPCM;                    // begin at full down_vel if over SLOW_DEPTH above 0 position
+        inter_bot_pos = -cur_pos + SLOW_DEPTH*100L*CPCM;                    // begin at full down_vel if over SLOW_DEPTH above 0 position
     }                                                                   //
 }
 
@@ -125,7 +128,6 @@ void eventStatusRegister (File &data_file) {
     strtokIdx = strtok(NULL, " ");                                      // get remaining long from response 
     move_status = strtol(strtokIdx, NULL, 10);                          // set value to move_status
     decodeMoveStatus(move_status);                                      // translate to binary for error checking
-    Serial.println(res);
 }
 
 void moveUp (File &data_file) {
@@ -138,14 +140,24 @@ void moveUp (File &data_file) {
     commandWinch(cmd, data_file);                                       //
     sprintf_P(cmd, PSTR("s r0xcd %ld\n"), accel);                       // set deceleration
     commandWinch(cmd, data_file);                                       //
+    // let out line at 1 m/s to water_depth                             //
     sprintf_P(cmd, PSTR("s r0xcb %ld\n"), up_vel);                      // set max velocity
     commandWinch(cmd, data_file);                                       //
-    sprintf_P(cmd, PSTR("s r0xca %ld\n"), sur_pos);                     // set final position of up move 
+    sprintf_P(cmd, PSTR("s r0xca %ld\n"), inter_sur_pos);               // move to surface at water_depth
+    commandWinch(cmd, data_file);                                       //
+    sprintf_P(cmd, PSTR("t 1\n"));                                      // initiate move
+    commandWinch(cmd, data_file);                                       //  
+    long move_time = abs(inter_sur_pos)/(up_vel/(10L))*1000L;           // expected time to complete move to surface 
+    delay(move_time-1000L);                                             // subtract 1 second from move time to ensure it isn't waiting at surface for cmds
+    // let out line slower to depth_factor*water_depth                  //
+    sprintf_P(cmd, PSTR("s r0xcb %ld\n"), sur_vel);                     // set max velocity
+    commandWinch(cmd, data_file);                                       //
+    sprintf_P(cmd, PSTR("s r0xca %ld\n"), sur_pos);                     // let out line from surface to depth_factor*water_depth
     commandWinch(cmd, data_file);                                       //
     sprintf_P(cmd, PSTR("t 1\n"));                                      // initiate move
     commandWinch(cmd, data_file);                                       //
-    long move_time = abs(sur_pos)/(up_vel/(10L))*1000L;                 // expected time to complete move up 
-    delay(move_time+5000L);                                             //
+    move_time = abs(sur_pos-inter_sur_pos)/(sur_vel/(10L))*1000L;       // expected time to complete move the rest of the way 
+    delay(move_time+5000L);                                             // add 5 seconds to make sure move is really complete
     eventStatusRegister(data_file);                                     //        
     getPosition(data_file);                                             // get final position of move, save to cur_pos
     Serial.print(F("Winch position: ")); Serial.println(cur_pos);       //
@@ -167,21 +179,21 @@ void moveDown (File &data_file) {
     // faster speed for most of way down                                //
     sprintf_P(cmd, PSTR("s r0xcb %ld\n"), down_vel);                    // set max velocity
     commandWinch(cmd, data_file);                                       //
-    sprintf_P(cmd, PSTR("s r0xca %ld\n"), inter_pos);                   // set final position of down move 
+    sprintf_P(cmd, PSTR("s r0xca %ld\n"), inter_bot_pos);               // set final position of down move 
     commandWinch(cmd, data_file);                                       //
     sprintf_P(cmd, PSTR("t 1\n"));                                      // initiate move
     commandWinch(cmd, data_file);                                       //
-    long move_time = abs(inter_pos)/(down_vel/(10L))*1000L;             // expected time to complete move down 
+    long move_time = abs(inter_bot_pos)/(down_vel/(10L))*1000L;         // expected time to complete move down 
     delay(move_time+1000L);                                             //
     eventStatusRegister(data_file);                                     //
     // slow down in final 2 meters
-    sprintf_P(cmd, PSTR("s r0xcb %ld\n"), slow_down_vel);              // set max velocity
+    sprintf_P(cmd, PSTR("s r0xcb %ld\n"), bot_vel);              // set max velocity
     commandWinch(cmd, data_file);                                       //
     sprintf_P(cmd, PSTR("s r0xca %ld\n"), bot_pos);                     // final 2 meters of movement
     commandWinch(cmd, data_file);                                       //
     sprintf_P(cmd, PSTR("t 1\n"));                                      // initiate move
     commandWinch(cmd, data_file);                                       //
-    move_time = abs(bot_pos - inter_pos)/(slow_down_vel/(10L))*1000L;  // expected time to complete move down 
+    move_time = abs(bot_pos - inter_bot_pos)/(bot_vel/(10L))*1000L;  // expected time to complete move down 
     delay(move_time+5000L);                                             //
     eventStatusRegister(data_file);                                     // 
     getPosition(data_file);                                             // get final position of move, update cur_pos
@@ -236,6 +248,15 @@ void getVar(char *c) {
     } else if (strcmp(c, "firstwait") == 0) {
         Serial.print(F("First profile wait time (s): "));
         Serial.println(first_wait);
+    } else if (strcmp(c, "factor") == 0) {
+        Serial.print(F("Depth factor: "));
+        Serial.println(depth_factor);
+    } else if (strcmp(c, "survel") == 0) {
+        Serial.print(F("Surface velocity (cm/s): "));
+        Serial.println(sur_vel);
+    } else if (strcmp(c, "botvel") == 0) {
+        Serial.print(F("Bottom velocity (cm/s): "));
+        Serial.println(bot_vel);
     } else if (strcmp(c, "all") == 0) {
         getVar("velup");
         getVar("veldown");
@@ -243,6 +264,9 @@ void getVar(char *c) {
         getVar("surfwait");
         getVar("bottwait");
         getVar("firstwait");
+        getVar("factor");
+        getVar("survel");
+        getVar("botvel");
     } else {
         Serial.println(F("Unrecognized variable name - no action taken."));
     }
@@ -258,10 +282,12 @@ void setVar(char *c, long val) {
         getVar("veldown");
     } else if (strcmp(c, "depth") == 0) {
         water_depth = val;
-        inter_pos = -water_depth*100L*CPCM+200L*CPCM;
-        bot_pos = -water_depth*100L*CPCM;
-        sur_pos = water_depth*100L*CPCM;
+        inter_bot_pos = -water_depth*depth_factor*100L*CPCM+200L*CPCM;
+        bot_pos = -water_depth*depth_factor*100L*CPCM;
+        inter_sur_pos = water_depth*100L*CPCM;
+        sur_pos = water_depth*depth_factor*100L*CPCM;
         getVar("depth");
+        getVar("factor");
     } else if (strcmp(c, "surfwait") == 0) {
         sur_wait = val;
         getVar("surfwait");
@@ -271,6 +297,26 @@ void setVar(char *c, long val) {
     } else if (strcmp(c, "firstwait") == 0) {
         first_wait = val;
         getVar("firstwait");
+    } else if (strcmp(c, "factor") == 0) {
+        if (val < 1) {
+            Serial.println(F("Depth factor must be greater than or equal to one - no changes were made."));
+            getVar("depth");
+            getVar("factor");
+        } else if (val >= 1) {
+        depth_factor = val;
+            inter_bot_pos = -water_depth*depth_factor*100L*CPCM+200L*CPCM;
+            bot_pos = -water_depth*depth_factor*100L*CPCM;
+            inter_sur_pos = water_depth*100L*CPCM;
+            sur_pos = water_depth*depth_factor*100L*CPCM;
+            getVar("depth");
+            getVar("factor");
+        }
+    } else if (strcmp(c, "survel") == 0) {
+        sur_vel = val*CPCM*10L;
+        getVar("survel");
+    } else if (strcmp(c, "botvel") == 0) {
+        bot_vel = val*CPCM*10L;
+        getVar("botvel");
     } else {
         Serial.println(F("Unrecognized variable name - no action taken."));
     }
@@ -282,8 +328,11 @@ void help() {
     Serial.println("");
     Serial.println(F("Enter a space then the variable name you wish to get or set. Options are:"));
     Serial.println(F("'velup': The max velocity of the profiler on its upwards profile in cm/s."));
+    Serial.println(F("'survel': The velocity of line payout after the profiler hits the surface in cm/s."));
     Serial.println(F("'veldown': The max velocity of the profiler on its downwards return in cm/s."));
+    Serial.println(F("'botvel: The velocity of the profiler on the final two meters of the descent in cm/s."));
     Serial.println(F("'depth': The water depth in meters."));
+    Serial.println(F("'factor': The water depth is multiplied by this factor and, after reaching the surface, this is how much line is paid out. Must be greater than or equal to one."));
     Serial.println(F("'surfwait': The wait time at the surface in seconds."));
     Serial.println(F("'bottwait': The wait time at the bottom in seconds. AKA, the time between profiles."));
     Serial.println(F("'firstwait': The wait time before beginning the first profile, after this setup is finished."));
@@ -310,7 +359,7 @@ void exit() {
     getVar("bottwait");
     getVar("firstwait");
     Serial.println(F("Variables are saved and will remain until changed."));
-    Serial.println(F("Good luck profiling! :)"));
+    Serial.println(F("Happy profiling! :)"));
 }
 
 byte readSerialCommand () {
@@ -376,7 +425,7 @@ void readVars() {
     EEPROM.get(RW_ADDRESS, up_vel);
     EEPROM.get(RW_ADDRESS + 4, down_vel);
     EEPROM.get(RW_ADDRESS + 8, water_depth);
-    inter_pos = -water_depth*100L*CPCM+200L*CPCM;
+    inter_bot_pos = -water_depth*100L*CPCM+200L*CPCM;
     bot_pos = -water_depth*100L*CPCM;
     sur_pos = water_depth*100L*CPCM;
     EEPROM.get(RW_ADDRESS + 12, sur_wait);
@@ -408,7 +457,7 @@ void setup () {
 
     // setup real time clock
     if (! rtc.begin()) {
-    Serial.println(F("Couldn't find RTC"));
+        Serial.println(F("Couldn't find RTC"));
         Serial.flush();
         while (1) delay(10);
     }
@@ -450,8 +499,8 @@ void setup () {
     Serial.println(readVcc());
 
     if (water_depth <= SLOW_DEPTH) {
-        // if water depth is less than SLOW_DEPTH, prevent positive inter_pos and move slowly the whole way down
-        inter_pos = 0;                  
+        // if water depth is less than SLOW_DEPTH, prevent positive inter_bot_pos and move slowly the whole way down
+        inter_bot_pos = 0;                  
     }
 
     // winch off until first profile
