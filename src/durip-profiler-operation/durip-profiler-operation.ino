@@ -15,7 +15,7 @@ File data_file;                                                         //
 const long CPCM = 244;                                                  // counts/cm (empirically measured from 100 ft of line payout)
 const long SLOW_DEPTH = 2;                                              // slowing down for final 2 meters on move down
 int water_depth = 25;                                                   // water depth in meters
-int depth_factor = 3;                                                   // factor to multiply by water depth to get actual line payout
+int depth_factor = 3*10;                                                // factor to multiply by water depth to get actual line payout, multiplied by 10 to allow for one decimal place
 long accel = CPCM*100L/10L;                                             // 1 m/s^2 accel/decel rate
 long up_vel = CPCM*100L*10L;                                            // 1 m/s upwards velocity
 long sur_vel = CPCM*25L*10L;                                            // 0.25 m/s surface velocity
@@ -23,10 +23,10 @@ long down_vel = CPCM*25L*10L;                                           // 0.25 
 long bot_vel = CPCM*5L*10L;                                             // 0.05 m/s final down velocity
 long cur_pos = 0;                                                       // stores position when winch turns off
                                                                         //
-long inter_sur_pos = water_depth*100L*CPCM;                             // move full speed up to water depth, then slow down at surface
-long sur_pos = water_depth*depth_factor*100L*CPCM;                      //
-long inter_bot_pos = -water_depth*depth_factor*100L*CPCM+SLOW_DEPTH*100L*CPCM;// move down at down_vel until reaching SLOW_DEPTH above bottom
-long bot_pos = -water_depth*depth_factor*100L*CPCM;                     // last two meters will be descended slower
+long inter_sur_pos = water_depth*100*CPCM;                              // move full speed up to water depth, then slow down at surface
+long sur_pos = water_depth*(depth_factor/10.0)*100*CPCM;                //
+long inter_bot_pos = -water_depth*depth_factor/10*100*CPCM+SLOW_DEPTH*100*CPCM;// move down at down_vel until reaching SLOW_DEPTH above bottom
+long bot_pos = -water_depth*depth_factor/10*100*CPCM;                   // last two meters will be descended slower
                                                                         //
 long move_status;                                                       //
 bool last_move_success = true;                                          //
@@ -46,11 +46,11 @@ const byte PIN_BRAKE = 9;                                               // toggl
 const byte PIN_MOTOR = 8;                                               // toggle the Motor
                                                                         //
 int cnt = 0;                                                            // count profiles
-bool sd_works = true;                                                   // 0 disables SD card
-bool rtc_works = true;                                                  // 0 disables RTC
+bool sd_works = true;                                                   // enables/disables SD card
+bool rtc_works = true;                                                  // enables/disables RTC
 bool serial_setup = true;                                               // for setting up values via serial
-bool latch_fault = false;                                               // record latch faults
-const bool RTC_SYNC = true;                                             // set to 1 to force RTC to sync to computer clock
+bool latch_fault = false;                                               // record latch faults (not implemented yet)
+const bool RTC_SYNC = false;                                            // set to true to force RTC to sync to compile time 
 const byte SD_CHIP_SELECT = 53;                                         // SD card chip select pin
 const int RW_ADDRESS = 0;                                               // address to read/write user modifiable vars to eeprom
 
@@ -148,7 +148,7 @@ void moveUp (File &data_file) {
     sprintf_P(cmd, PSTR("t 1\n"));                                      // initiate move
     commandWinch(cmd, data_file);                                       //  
     long move_time = abs(inter_sur_pos)/(up_vel/(10L))*1000L;           // expected time to complete move to surface 
-    delay(move_time-1000L);                                             // subtract 1 second from move time to ensure it isn't waiting at surface for cmds
+    delay(move_time-2000L);                                             // subtract 1 second from move time to ensure it isn't waiting at surface for cmds
     // let out line slower to depth_factor*water_depth                  //
     sprintf_P(cmd, PSTR("s r0xcb %ld\n"), sur_vel);                     // set max velocity
     commandWinch(cmd, data_file);                                       //
@@ -230,43 +230,43 @@ long readVcc() {
 
 void getVar(char *c) {
     // retrieve current user-modifiable variables
-    if (strcmp(c, "velup") == 0) {
+    if (strcmp(c, "upvel") == 0) {
         Serial.print(F("Up velocity (cm/s): "));
         Serial.println(up_vel/(CPCM*10L));    
-    } else if (strcmp(c, "veldown") == 0) {
+    } else if (strcmp(c, "downvel") == 0) {
         Serial.print(F("Down velocity (cm/s): "));
         Serial.println(down_vel/(CPCM*10L));
-    } else if (strcmp(c, "depth") ==0) {
+    } else if (strcmp(c, "depth") == 0) {
         Serial.print(F("Water depth (m): "));
         Serial.println(water_depth);
     } else if (strcmp(c, "surfwait") == 0) {
-        Serial.print(F("Surface wait time (s): "));
-        Serial.println(sur_wait);    
+        Serial.print(F("Surface wait time (min): "));
+        Serial.println(sur_wait/60.0);    
     } else if (strcmp(c, "bottwait") == 0) {
-        Serial.print(F("Bottom wait time (s): "));
-        Serial.println(bot_wait);
+        Serial.print(F("Bottom wait time (min): "));
+        Serial.println(bot_wait/60.0);
     } else if (strcmp(c, "firstwait") == 0) {
-        Serial.print(F("First profile wait time (s): "));
-        Serial.println(first_wait);
+        Serial.print(F("First profile wait time (min): "));
+        Serial.println(first_wait/60.0);
     } else if (strcmp(c, "factor") == 0) {
         Serial.print(F("Depth factor: "));
-        Serial.println(depth_factor);
-    } else if (strcmp(c, "survel") == 0) {
+        Serial.println((double)depth_factor/10.0);
+    } else if (strcmp(c, "surfvel") == 0) {
         Serial.print(F("Surface velocity (cm/s): "));
-        Serial.println(sur_vel);
-    } else if (strcmp(c, "botvel") == 0) {
+        Serial.println(sur_vel/(CPCM*10L));
+    } else if (strcmp(c, "bottvel") == 0) {
         Serial.print(F("Bottom velocity (cm/s): "));
-        Serial.println(bot_vel);
+        Serial.println(bot_vel/(CPCM*10L));
     } else if (strcmp(c, "all") == 0) {
-        getVar("velup");
-        getVar("veldown");
+        getVar("upvel");
+        getVar("surfvel");
+        getVar("downvel");
+        getVar("bottvel");
         getVar("depth");
+        getVar("factor");
         getVar("surfwait");
         getVar("bottwait");
         getVar("firstwait");
-        getVar("factor");
-        getVar("survel");
-        getVar("botvel");
     } else {
         Serial.println(F("Unrecognized variable name - no action taken."));
     }
@@ -274,49 +274,49 @@ void getVar(char *c) {
 
 void setVar(char *c, long val) {
     // set current user-modifiable variables
-    if (strcmp(c, "velup") == 0) {
+    if (strcmp(c, "upvel") == 0) {
         up_vel = val*CPCM*10L;
-        getVar("velup");
-    } else if (strcmp(c, "veldown") == 0) {
+        getVar("upvel");
+    } else if (strcmp(c, "downvel") == 0) {
         down_vel = val*CPCM*10L;
-        getVar("veldown");
+        getVar("downvel");
     } else if (strcmp(c, "depth") == 0) {
         water_depth = val;
-        inter_bot_pos = -water_depth*depth_factor*100L*CPCM+200L*CPCM;
-        bot_pos = -water_depth*depth_factor*100L*CPCM;
+        inter_bot_pos = -water_depth*depth_factor/10L*100L*CPCM+200L*CPCM;
+        bot_pos = -water_depth*depth_factor/10L*100L*CPCM;
         inter_sur_pos = water_depth*100L*CPCM;
-        sur_pos = water_depth*depth_factor*100L*CPCM;
+        sur_pos = water_depth*depth_factor/10L*100L*CPCM;
         getVar("depth");
         getVar("factor");
     } else if (strcmp(c, "surfwait") == 0) {
-        sur_wait = val;
+        sur_wait = val*60;
         getVar("surfwait");
     } else if (strcmp(c, "bottwait") == 0) {
-        bot_wait = val;
+        bot_wait = val*60;
         getVar("bottwait");
     } else if (strcmp(c, "firstwait") == 0) {
-        first_wait = val;
+        first_wait = val*60;
         getVar("firstwait");
     } else if (strcmp(c, "factor") == 0) {
-        if (val < 1) {
+        if (val < 10) {
             Serial.println(F("Depth factor must be greater than or equal to one - no changes were made."));
             getVar("depth");
             getVar("factor");
-        } else if (val >= 1) {
-        depth_factor = val;
-            inter_bot_pos = -water_depth*depth_factor*100L*CPCM+200L*CPCM;
-            bot_pos = -water_depth*depth_factor*100L*CPCM;
-            inter_sur_pos = water_depth*100L*CPCM;
-            sur_pos = water_depth*depth_factor*100L*CPCM;
+        } else if (val >= 10) {
+            depth_factor = val;
+            inter_bot_pos = -water_depth*(depth_factor/10.0)*100*CPCM+200*CPCM;
+            bot_pos = -water_depth*(depth_factor/10.0)*100*CPCM;
+            inter_sur_pos = water_depth*100*CPCM;
+            sur_pos = water_depth*(depth_factor/10.0)*100*CPCM;
             getVar("depth");
             getVar("factor");
         }
-    } else if (strcmp(c, "survel") == 0) {
+    } else if (strcmp(c, "surfvel") == 0) {
         sur_vel = val*CPCM*10L;
-        getVar("survel");
-    } else if (strcmp(c, "botvel") == 0) {
+        getVar("surfvel");
+    } else if (strcmp(c, "bottvel") == 0) {
         bot_vel = val*CPCM*10L;
-        getVar("botvel");
+        getVar("bottvel");
     } else {
         Serial.println(F("Unrecognized variable name - no action taken."));
     }
@@ -327,16 +327,16 @@ void help() {
     Serial.println(F("Begin line with 'g' to get current values or 's' to set values."));
     Serial.println("");
     Serial.println(F("Enter a space then the variable name you wish to get or set. Options are:"));
-    Serial.println(F("'velup': The max velocity of the profiler on its upwards profile in cm/s."));
-    Serial.println(F("'survel': The velocity of line payout after the profiler hits the surface in cm/s."));
-    Serial.println(F("'veldown': The max velocity of the profiler on its downwards return in cm/s."));
-    Serial.println(F("'botvel: The velocity of the profiler on the final two meters of the descent in cm/s."));
+    Serial.println(F("'upvel': The max velocity of the profiler on its upwards profile in cm/s."));
+    Serial.println(F("'surfvel': The velocity of line payout after the profiler hits the surface in cm/s."));
+    Serial.println(F("'downvel': The max velocity of the profiler on its downwards return in cm/s."));
+    Serial.println(F("'bottvel: The velocity of the profiler on the final two meters of the descent in cm/s."));
     Serial.println(F("'depth': The water depth in meters."));
     Serial.println(F("'factor': The water depth is multiplied by this factor and, after reaching the surface, this is how much line is paid out. Must be greater than or equal to one."));
-    Serial.println(F("'surfwait': The wait time at the surface in seconds."));
-    Serial.println(F("'bottwait': The wait time at the bottom in seconds. AKA, the time between profiles."));
-    Serial.println(F("'firstwait': The wait time before beginning the first profile, after this setup is finished."));
-    Serial.println(F("'all': Get values for all user modifiable variables (only works with 'g')."));
+    Serial.println(F("'surfwait': The wait time at the surface in minutes."));
+    Serial.println(F("'bottwait': The wait time at the bottom in minutes. AKA, the time between profiles."));
+    Serial.println(F("'firstwait': The wait time before beginning the first profile, after this setup is finished, in minutes."));
+    Serial.println(F("'all': Get values for all user modifiable variables (only works with 'g'/get)."));
     Serial.println("");
     Serial.println(F("If setting a value, enter a space and the value you wish to set the variable to."));
     Serial.println("");
@@ -351,10 +351,15 @@ void exit() {
     serial_setup = false;
     Serial.print(F("Beginning profiling in "));
     Serial.print(first_wait);
-    Serial.println(F("seconds. Current settings are:"));
-    getVar("velup");
-    getVar("veldown");
+    Serial.print(F(" seconds ("));
+    Serial.print(first_wait/60.0);
+    Serial.println(F(" minutes). Current settings are:"));
+    getVar("upvel");
+    getVar("surfvel");
+    getVar("downvel");
+    getVar("bottvel");
     getVar("depth");
+    getVar("factor");
     getVar("surfwait");
     getVar("bottwait");
     getVar("firstwait");
@@ -362,7 +367,7 @@ void exit() {
     Serial.println(F("Happy profiling! :)"));
 }
 
-byte readSerialCommand () {
+void readSerialCommand () {
     // receive commands from PC to set user modifiable variables
     // wait for serial input
     while (Serial.available() == 0) {
@@ -385,6 +390,7 @@ byte readSerialCommand () {
     }
     rec[idx] = '\0';    // set end string bit
     idx = 0;            // reset idx
+    long val;
     // decode serial input according to format shown in help()
     char *strtokIdx;
     strtokIdx = strtok(rec, " \n\0");    
@@ -392,10 +398,20 @@ byte readSerialCommand () {
         strtokIdx = strtok(NULL, " ");
         getVar(strtokIdx);
     } else if (strcmp(strtokIdx, "s") == 0) {
-        // sets val to 0 if incorrectly input - need to handle this somehow
+        // strtol sets val to 0 if not able to convert to long
         strtokIdx = strtok(NULL, " ");
-        long val = strtol(strtok(NULL, " "), NULL, 10);
+        if (strcmp(strtokIdx, "factor") == 0) {
+            // factor is a float so deal with that (only stores first decimal place)
+            double temp_val = strtod(strtok(NULL, " "), NULL);
+            Serial.println(round(temp_val*10));
+            val = round(temp_val*10);
+            Serial.println(val);
+        } else{
+            // all other variables should be integers
+            val = strtol(strtok(NULL, " "), NULL, 10);
+        }
         if (val == 0L) {
+            // catch incorrect input (counting 0 as incorrect for simplicity)
             Serial.println(F("Invalid value input - no action taken."));
         } else {
             setVar(strtokIdx, val);
@@ -415,9 +431,12 @@ void saveVars() {
     EEPROM.put(RW_ADDRESS, up_vel);
     EEPROM.put(RW_ADDRESS + 4, down_vel);
     EEPROM.put(RW_ADDRESS + 8, water_depth);
-    EEPROM.put(RW_ADDRESS + 12, sur_wait);
+    EEPROM.put(RW_ADDRESS + 12, depth_factor);
     EEPROM.put(RW_ADDRESS + 16, bot_wait);
     EEPROM.put(RW_ADDRESS + 20, first_wait);
+    EEPROM.put(RW_ADDRESS + 24, sur_wait);
+    EEPROM.put(RW_ADDRESS + 28, sur_vel);
+    EEPROM.put(RW_ADDRESS + 32, bot_vel);
 }
 
 void readVars() {
@@ -425,12 +444,16 @@ void readVars() {
     EEPROM.get(RW_ADDRESS, up_vel);
     EEPROM.get(RW_ADDRESS + 4, down_vel);
     EEPROM.get(RW_ADDRESS + 8, water_depth);
-    inter_bot_pos = -water_depth*100L*CPCM+200L*CPCM;
-    bot_pos = -water_depth*100L*CPCM;
-    sur_pos = water_depth*100L*CPCM;
-    EEPROM.get(RW_ADDRESS + 12, sur_wait);
+    EEPROM.get(RW_ADDRESS + 12, depth_factor);
+    inter_sur_pos = water_depth*100*CPCM;                             
+    sur_pos = water_depth*(depth_factor/10.0)*100*CPCM;                   
+    inter_bot_pos = -water_depth*(depth_factor/10.0)*100*CPCM+SLOW_DEPTH*100*CPCM;
+    bot_pos = -water_depth*(depth_factor/10.0)*100*CPCM;  
     EEPROM.get(RW_ADDRESS + 16, bot_wait);
     EEPROM.get(RW_ADDRESS + 20, first_wait);
+    EEPROM.get(RW_ADDRESS + 24, sur_wait);
+    EEPROM.get(RW_ADDRESS + 28, sur_vel);
+    EEPROM.get(RW_ADDRESS + 32, bot_vel);
 }
 
 void setup () {
