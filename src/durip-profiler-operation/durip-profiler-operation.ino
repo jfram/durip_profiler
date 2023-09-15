@@ -260,13 +260,13 @@ void getVar(char *c, bool all=false) {
         }
     } else if (strcmp(c, "surfwait") == 0) {
         Serial.print(F("Surface wait time (min): "));
-        Serial.println(sur_wait/60.0);    
+        Serial.println(sur_wait/60);    
     } else if (strcmp(c, "bottwait") == 0) {
         Serial.print(F("Bottom wait time (min): "));
-        Serial.println(bot_wait/60.0);
+        Serial.println(bot_wait/60);
     } else if (strcmp(c, "firstwait") == 0) {
         Serial.print(F("First profile wait time (min): "));
-        Serial.println(first_wait/60.0);
+        Serial.println(first_wait/60);
     } else if (strcmp(c, "factor") == 0) {
         if (!all) {
             Serial.print(F("Water depth (m): "));
@@ -327,8 +327,8 @@ void setVar(char *c, long val) {
         bot_pos = -water_depth*depth_factor/10L*100L*CPCM;
         inter_sur_pos = water_depth*100L*CPCM;
         sur_pos = water_depth*depth_factor/10L*100L*CPCM;
-        getVar("depth");
-        getVar("factor");
+        getVar("depth", true);
+        getVar("factor", true);
     } else if (strcmp(c, "surfwait") == 0) {
         sur_wait = val*60;
         getVar("surfwait");
@@ -341,16 +341,16 @@ void setVar(char *c, long val) {
     } else if (strcmp(c, "factor") == 0) {
         if (val < 10) {
             Serial.println(F("Depth factor must be greater than or equal to one - no changes were made."));
-            getVar("depth");
-            getVar("factor");
+            getVar("depth", true);
+            getVar("factor", true);
         } else if (val >= 10) {
             depth_factor = val;
             inter_bot_pos = -water_depth*(depth_factor/10.0)*100*CPCM+200*CPCM;
             bot_pos = -water_depth*(depth_factor/10.0)*100*CPCM;
             inter_sur_pos = water_depth*100*CPCM;
             sur_pos = water_depth*(depth_factor/10.0)*100*CPCM;
-            getVar("depth");
-            getVar("factor");
+            getVar("depth", true);
+            getVar("factor", true);
         }
     } else if (strcmp(c, "minsurfvel") == 0) {
         if (val*CPCM*10 > max_sur_vel) {
@@ -455,9 +455,7 @@ void readSerialCommand () {
         if (strcmp(strtokIdx, "factor") == 0) {
             // factor is a float so deal with that (only stores first decimal place)
             double temp_val = strtod(strtok(NULL, " "), NULL);
-            Serial.println(round(temp_val*10));
             val = round(temp_val*10);
-            Serial.println(val);
         } else{
             // all other variables should be integers
             val = strtol(strtok(NULL, " "), NULL, 10);
