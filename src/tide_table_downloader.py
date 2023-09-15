@@ -21,15 +21,24 @@ if __name__ == "__main__":
     print("Verify the entry is correct: " + year + "/" + month + "/" + day)
 
     base_url = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?"
-    param_url = "begin_date="+start_date+"&end_date="+end_date+"&station="+station
-    suffix_url = "&product=predictions&datum=MLLW&time_zone=gmt&interval=hilo&units=metric&application=OOI_AScherer&format=csv"
+    param_url = ("begin_date="+start_date
+                 + "&end_date="+end_date
+                 + "&station="+station)
+    suffix_url = ("&product=predictions"
+                  "&datum=MLLW"
+                  "&time_zone=gmt"
+                  "&interval=hilo"
+                  "&units=metric"
+                  "&application=OOI_AScherer"
+                  "&format=csv")
     response = requests.get(base_url + param_url + suffix_url)
 
     file_path = './tides.txt'
     with open(file_path, 'wb') as out_file:
         out_file.write(response.content)
 
-    df = pd.read_csv(file_path, usecols=['Date Time'], parse_dates={'datetime': [0]})
+    df = pd.read_csv(file_path, usecols=['Date Time'],
+                     parse_dates={'datetime': [0]})
 
     df['epoch'] = (df.datetime.astype('int64')/1e9).astype(int)
     df = df.set_index('epoch')
