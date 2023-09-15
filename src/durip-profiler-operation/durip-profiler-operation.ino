@@ -16,11 +16,13 @@ const long CPCM = 244;                                                  // count
 const long SLOW_DEPTH = 2;                                              // slowing down for final 2 meters on move down
 int water_depth = 25;                                                   // water depth in meters
 int depth_factor = 3*10;                                                // factor to multiply by water depth to get actual line payout, multiplied by 10 to allow for one decimal place
-long accel = CPCM*100L/10L;                                             // 1 m/s^2 accel/decel rate
-long up_vel = CPCM*100L*10L;                                            // 1 m/s upwards velocity
-long sur_vel = CPCM*25L*10L;                                            // 0.25 m/s surface velocity
-long down_vel = CPCM*25L*10L;                                           // 0.25 m/s initial down velocity
-long bot_vel = CPCM*5L*10L;                                             // 0.05 m/s final down velocity
+long accel = CPCM*100/10;                                               // 1 m/s^2 accel/decel rate
+long up_vel = CPCM*100*10;                                              // 1 m/s upwards velocity
+long min_sur_vel = CPCM*10*10;                                          //
+long max_sur_vel = CPCM*30*10;                                          //
+long sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0;                 // 0.25 m/s surface velocity
+long down_vel = CPCM*25*10;                                             // 0.25 m/s initial down velocity
+long bot_vel = CPCM*5*10;                                               // 0.05 m/s final down velocity
 long cur_pos = 0;                                                       // stores position when winch turns off
                                                                         //
 long inter_sur_pos = water_depth*100*CPCM;                              // move full speed up to water depth, then slow down at surface
@@ -53,6 +55,13 @@ bool latch_fault = false;                                               // recor
 const bool RTC_SYNC = false;                                            // set to true to force RTC to sync to compile time 
 const byte SD_CHIP_SELECT = 53;                                         // SD card chip select pin
 const int RW_ADDRESS = 0;                                               // address to read/write user modifiable vars to eeprom
+                                                                        //
+bool use_tides = true;                                                  // variable to store tidal lookup success/failure
+File tide_file;                                                         // file that will open tides.txt from SD card
+int searchidx = 0;                                                      // search index that stores line of previously found tide time
+double lower_tide_time;                                                 // high/low tide just before now
+double upper_tide_time;                                                 // high/low tide just after now
+int tide_success;                                                       // return value to debug failures in tidal lookup
 
 void commandWinch(char *cmd, File &data_file) {
     // send command to winch
@@ -228,7 +237,7 @@ long readVcc() {
   return result; // Vcc in millivolts
 }
 
-void getVar(char *c) {
+void getVar(char *c, bool all=false) {
     // retrieve current user-modifiable variables
     if (strcmp(c, "upvel") == 0) {
         Serial.print(F("Up velocity (cm/s): "));
@@ -252,14 +261,34 @@ void getVar(char *c) {
         Serial.print(F("Depth factor: "));
         Serial.println((double)depth_factor/10.0);
     } else if (strcmp(c, "surfvel") == 0) {
-        Serial.print(F("Surface velocity (cm/s): "));
+        Serial.print(F("Default surface velocity (cm/s): "));
         Serial.println(sur_vel/(CPCM*10L));
     } else if (strcmp(c, "bottvel") == 0) {
         Serial.print(F("Bottom velocity (cm/s): "));
         Serial.println(bot_vel/(CPCM*10L));
+    } else if (strcmp(c, "minsurfvel") == 0) {
+        Serial.print(F("Minimum surface velocity (cm/s): "));
+        Serial.println(min_sur_vel/(CPCM*10));
+        if (!all) {
+            Serial.print(F("Default surface velocity (cm/s): "));
+            Serial.println(sur_vel/(CPCM*10));
+        }
+    } else if (strcmp(c, "maxsurfvel") == 0) {
+        Serial.print(F("Maximum surface velocity (cm/s): "));
+        Serial.println(max_sur_vel/(CPCM*10));
+        if (!all) {
+            Serial.print(F("Default surface velocity (cm/s): "));
+            Serial.println(sur_vel/(CPCM*10));
+        }
+    } else if (strcmp(c, "defsurfvel") == 0) {
+        Serial.print(F("Default surface velocity (cm/s): "));
+        Serial.println(sur_vel/(CPCM*10));
     } else if (strcmp(c, "all") == 0) {
         getVar("upvel");
         getVar("surfvel");
+        getVar("minsurfvel", true);
+        getVar("maxsurfvel", true);
+        getVar("defsurfvel");
         getVar("downvel");
         getVar("bottvel");
         getVar("depth");
@@ -311,9 +340,14 @@ void setVar(char *c, long val) {
             getVar("depth");
             getVar("factor");
         }
-    } else if (strcmp(c, "surfvel") == 0) {
-        sur_vel = val*CPCM*10L;
-        getVar("surfvel");
+    } else if (strcmp(c, "minsurfvel") == 0) {
+        min_sur_vel = val*CPCM*10L;
+        sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
+        getVar("minsurfvel");
+    } else if (strcmp(c, "maxsurfvel") == 0) {
+        max_sur_vel = val*CPCM*10L;
+        sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
+        getVar("maxsurfvel");
     } else if (strcmp(c, "bottvel") == 0) {
         bot_vel = val*CPCM*10L;
         getVar("bottvel");
@@ -328,7 +362,9 @@ void help() {
     Serial.println("");
     Serial.println(F("Enter a space then the variable name you wish to get or set. Options are:"));
     Serial.println(F("'upvel': The max velocity of the profiler on its upwards profile in cm/s."));
-    Serial.println(F("'surfvel': The velocity of line payout after the profiler hits the surface in cm/s."));
+    Serial.println(F("'maxsurfvel': The maximum velocity in cm/s of line payout after the profiler hits the surface based on set depth."));
+    Serial.println(F("'minsurfvel': The minimum velocity in cm/s of line payout after the profiler hits the surface based on set depth."));
+    Serial.println(F("'defsurfvel': The default surface velocity in cm/s, taken as the average of maxsurfvel and minsurfvel. Cannot be set directly - must change maxsurfvel or minsurfvel to update defsurfvel."));
     Serial.println(F("'downvel': The max velocity of the profiler on its downwards return in cm/s."));
     Serial.println(F("'bottvel: The velocity of the profiler on the final two meters of the descent in cm/s."));
     Serial.println(F("'depth': The water depth in meters."));
@@ -354,15 +390,7 @@ void exit() {
     Serial.print(F(" seconds ("));
     Serial.print(first_wait/60.0);
     Serial.println(F(" minutes). Current settings are:"));
-    getVar("upvel");
-    getVar("surfvel");
-    getVar("downvel");
-    getVar("bottvel");
-    getVar("depth");
-    getVar("factor");
-    getVar("surfwait");
-    getVar("bottwait");
-    getVar("firstwait");
+    getVar("all");
     Serial.println(F("Variables are saved and will remain until changed."));
     Serial.println(F("Happy profiling! :)"));
 }
@@ -435,8 +463,10 @@ void saveVars() {
     EEPROM.put(RW_ADDRESS + 16, bot_wait);
     EEPROM.put(RW_ADDRESS + 20, first_wait);
     EEPROM.put(RW_ADDRESS + 24, sur_wait);
-    EEPROM.put(RW_ADDRESS + 28, sur_vel);
-    EEPROM.put(RW_ADDRESS + 32, bot_vel);
+    EEPROM.put(RW_ADDRESS + 28, bot_vel);
+    EEPROM.put(RW_ADDRESS + 32, min_sur_vel);
+    EEPROM.put(RW_ADDRESS + 36, max_sur_vel);
+    sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
 }
 
 void readVars() {
@@ -452,8 +482,134 @@ void readVars() {
     EEPROM.get(RW_ADDRESS + 16, bot_wait);
     EEPROM.get(RW_ADDRESS + 20, first_wait);
     EEPROM.get(RW_ADDRESS + 24, sur_wait);
-    EEPROM.get(RW_ADDRESS + 28, sur_vel);
-    EEPROM.get(RW_ADDRESS + 32, bot_vel);
+    EEPROM.get(RW_ADDRESS + 28, bot_vel);
+    EEPROM.get(RW_ADDRESS + 32, min_sur_vel);
+    EEPROM.get(RW_ADDRESS + 36, max_sur_vel);
+    sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
+
+}
+
+int findClosestTideTime (long now_time, File &tide_file) {
+    /* 
+    returns index for first tide time after now and saves search index for future use
+    must use format produced by tide_table_downloader to work, assumes constant line length of 12 characters
+    returns special values for fault conditions, resets search index and checks again in case RTC can fix itself
+    function will break in ~2300 when unix time becomes 10^11
+    */
+    long lines = tide_file.size()/12;
+    long tide_time;
+    int i = searchidx;
+    tide_file.seek(i*12);
+    char buffer[12];
+    while (true) {
+        // read twelve characters
+        for (int j = 0; j < 12; j++) {
+            buffer[j] = tide_file.read();
+        }
+        // stop searching if last entry in buffer is not new line, formatting is incorrect
+        if (buffer[11] != '\n') {
+            searchidx = 0;
+            return -3;
+        }
+        tide_time = strtol(buffer, NULL, 10);
+        // stop searching if strtol returns 0, formatting is incorrect
+        if (tide_time == 0) {
+            searchidx = 0;
+            return -3;
+        }
+        if (tide_time > now_time) {
+            break;
+        }
+        i++;
+        tide_file.seek(i*12);
+        // stop searching at end of file as all times are before now, reset to index to zero to try again next profile
+        if (i >= lines) {
+            searchidx = 0;
+            return -1;
+        }
+    }
+    // if search returns zeroeth index all tide times are after now, reset index to 0 and try again next profile
+    if (i == 0) {
+        searchidx = 0;
+        return -2;
+    }
+    // if value is found successfully, save it, and save search index for next time
+    searchidx = i;
+    upper_tide_time = tide_time;
+    // get the tide time just before now for linear regression
+    tide_file.seek((i-1)*12);
+    for (int j = 0; j < 12; j++) {
+        buffer[j] = tide_file.read();
+    }
+    lower_tide_time = strtol(buffer, NULL, 10);
+    // i will be strictly greater than zero if successful
+    return i;
+}
+
+void getTidalState (File &tide_file) {
+    /*
+    set surface velocity based on time between high/low tides
+    also handle faults by setting surface velocity to default (avg of max/min)
+    */
+    double seconds = now.unixtime();
+    tide_success = findClosestTideTime(seconds, tide_file);
+    // all times are after now
+    if (tide_success == -1) {
+        use_tides = false;
+        sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
+    // all times are before now (also catches return 0 in case if statement in findClosest doesn't trigger)
+    } else if (tide_success == -2 || tide_success == 0) {
+        use_tides = false;
+        sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
+    // incorrect tide file format
+    } else if (tide_success == -3) {
+        use_tides = false;
+        sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
+    // success - compute tidal state based on linear regression between high and low tide times, using abs value function
+    } else if (tide_success > 0) {
+        double slope = -2.0*(double)(max_sur_vel - min_sur_vel)/(upper_tide_time - lower_tide_time);
+        double peak_flow = (upper_tide_time + lower_tide_time)/2.0;
+        sur_vel = slope*fabs(seconds - peak_flow) + (double)max_sur_vel;
+    // catch any other unknown states
+    } else {
+        use_tides = false;
+        sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
+    }
+}
+
+void printTidalState(File &data_file) {
+    // records results of getTidalState since can't have two files open on SD card at same time and prints surface velocity used
+    // all times are after now
+    if (tide_success == -1) {
+        Serial.print(F("All tide table values are before current time. Using default surface velocity (cm/s): "));
+        Serial.println(sur_vel/(double)(CPCM*10));
+        data_file.print(F("All tide table values are before current time. Using default surface velocity (cm/s): "));
+        data_file.println(sur_vel/(double)(CPCM*10));
+    // all times are before now (also catches return 0 in case if statement in findClosest doesn't trigger)
+    } else if (tide_success == -2 || tide_success == 0) {
+        Serial.print(F("All tide table values are after current time. Using default surface velocity (cm/s): "));
+        Serial.println(sur_vel/(double)(CPCM*10));
+        data_file.print(F("All tide table values are after current time. Using default surface velocity (cm/s): "));
+        data_file.println(sur_vel/(double)(CPCM*10));
+    // incorrect tide file format
+    } else if (tide_success == -3) {
+        Serial.print(F("Tide table formatting incorrect. Using default surface velocity (cm/s): "));
+        Serial.println(sur_vel/(double)(CPCM*10));
+        data_file.print(F("Tide table formatting incorrect. Using default surface velocity (cm/s): "));
+        data_file.println(sur_vel/(double)(CPCM*10));
+    // success
+    } else if (tide_success > 0) {
+        Serial.print(F("Tide table lookup succeeded! Using surface velocity (cm/s): "));
+        Serial.println(sur_vel/(double)(CPCM*10));
+        data_file.print(F("Tide table lookup succeeded! Using surface velocity (cm/s): "));
+        data_file.println(sur_vel/(double)(CPCM*10));
+    // catch any other unknown states
+    } else {
+        Serial.print(F("Unknown tide table error. Using default surface velocity."));
+        Serial.println(sur_vel/(double)(CPCM*10));
+        data_file.print(F("Unknown tide table error. Using default surface velocity."));
+        data_file.println(sur_vel/(double)(CPCM*10));
+    }
 }
 
 void setup () {
@@ -480,27 +636,34 @@ void setup () {
 
     // setup real time clock
     if (! rtc.begin()) {
-        Serial.println(F("Couldn't find RTC"));
         Serial.flush();
-        while (1) delay(10);
+        rtc_works = false;
+        sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
+        Serial.print(F("Couldn't find RTC. Using default surface velocity (cm/s): "));
+        Serial.println(sur_vel);
+    } else {
+        Serial.println(F("Realtime clock is ready."));
     }
-    if (rtc.lostPower()) { // ! rtc.initialized() || 
+    if (rtc.lostPower()) {  
         Serial.println(F("RTC lost power, syncing time..."));
         rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
         delay(2000);
-    } // rtc.start();
+    } 
     if (RTC_SYNC) {
+        // syncs RTC clock with system. Make sure system is set to UTC and is uploaded quickly after compile!
         Serial.println(F("Force syncing RTC..."));
         rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
         delay(2000);
-    }
-    Serial.println(F("Realtime clock is ready."));
+    } 
 
     // setup sd card
     Serial.println(F("Initializing SD card... "));
     if (!SD.begin(SD_CHIP_SELECT)) {
-        Serial.println(F("SD card failed, or not present"));
         sd_works = false;
+        use_tides = false;
+        sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
+        Serial.print(F("SD card failed, or not present. Using default surface velocity (cm/s): "));
+        Serial.println(sur_vel);        
     } else {
         Serial.println(F("SD card initialized."));
     }
@@ -508,10 +671,10 @@ void setup () {
     // read previously saved vars from EEPROM
     readVars();
     // setup from serial input
-    Serial.println(F("Hello! Please enter commands to change variables."));
-    Serial.println(F("Entering 'help' displays available commands."));
+    Serial.println(F("\n\nPlease enter commands to get or set variables."));
+    Serial.println(F("Enter 'help' to display list of available commands."));
     while (serial_setup) {
-        Serial.println("Ready for next serial command.");
+        Serial.println("\n\nReady for next serial command.");
         readSerialCommand();
         delay(1000);
     }
@@ -528,7 +691,7 @@ void setup () {
 
     // winch off until first profile
     digitalWrite(PIN_BRAKE, HIGH);
-    digitalWrite(PIN_MOTOR, HIGH);
+    digitalWrite(PIN_MOTOR, HIGH); 
 
     // first profile delay 
     delay(first_wait*1000);
@@ -542,6 +705,20 @@ void loop () {
         sprintf_P(file_name, PSTR("%02d%02d%02d%02d.txt"), now.month(), now.day(), now.hour(), now.minute());
         Serial.print(F("Opening: "));
         Serial.println(file_name);
+    } else {
+        use_tides = false;
+        sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
+    }
+    if (use_tides) {
+        // compute surface velocity based on tides if RTC and SD are working
+        File tide_file = SD.open("tides.txt");
+        if (tide_file) {
+            getTidalState(tide_file);
+            tide_file.close();
+        } else if (!tide_file) {
+
+        }
+
     }
 
     File data_file = SD.open(file_name, FILE_WRITE); 
@@ -561,7 +738,10 @@ void loop () {
         now=rtc.now();
         Serial.println(now.timestamp(DateTime::TIMESTAMP_FULL));
         data_file.println(now.timestamp(DateTime::TIMESTAMP_FULL));
-    }
+    } 
+
+    // print tidal success and surface velocity 
+    printTidalState(data_file);
 
     // get voltage from arduino battery pack
     data_file.print(F("Arduino battery voltage (V): "));
@@ -612,9 +792,12 @@ void loop () {
     // close data file
     data_file.close(); 
     if (!data_file) {
-        Serial.print(F("Closed ")); Serial.println(file_name);
+        Serial.print(F("Closed: ")); Serial.println(file_name);
     } 
 
+    // reset use tides to try again next loop
+    use_tides = true; 
+    
     // bottom delay between profiles
     delay(bot_wait*1000);
     
