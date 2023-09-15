@@ -19,7 +19,7 @@ The success of the winch operation depends on several key preparations before pr
 
 A serial interface is used to change profiling variables. The connection should be set at 9600-8-N-1. Commands should be sent via terminal all at once and not one letter at a time (e.g., via the "send string" function in CoolTerm). All arguments should be integers except for 'factor', which can have up to one decimal place. Commands and arguments should be separated with a space. Trailing newlines and spaces are ignored.
 
-Serial communication consists of a *command*, a *variable*, and an optional *argument*, all separated by a space. Available *commands*, *variables*, and *arguments* is as follows:
+Serial communication consists of a *command*, a *variable*, and an optional *argument*, all separated by a space. Syntax for *commands*, *variables*, and *arguments* is as follows:
 - Begin line with a *command*: 'g' to get current values or 's' to set values. Only the *command* 's' can include an *argument*.
 - Enter a space then the *variable* you wish to get or set. Available *variables* to change are:
     - 'upvel': The max velocity of the profiler on its upwards profile in cm/s.
