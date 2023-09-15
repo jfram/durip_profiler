@@ -763,8 +763,8 @@ void loop () {
     // print tidal success and surface velocity 
     printTidalState(data_file);
 
-    // get voltage from arduino battery pack
-    data_file.print(F("Arduino battery voltage (V): "));
+    // get voltage supplied to arduino board
+    data_file.print(F("Arduino board voltage (V): "));
     data_file.println(readVcc());
 
     // power winch motor and brake
