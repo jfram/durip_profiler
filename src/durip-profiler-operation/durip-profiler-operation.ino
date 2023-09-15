@@ -401,18 +401,24 @@ void help() {
     Serial.println(F("Wait for any responses to indicate success."));
     Serial.println(F("The serial monitor will then reply to tell you when you can input the next command."));
     Serial.println("");
-    Serial.println(F("When finished, enter 'exit' to finish setup and begin profiling operations."));
+    Serial.println(F("When finished, enter 'exit' to finish setup and begin profiling operations.\n\n"));
 } 
 
 void exit() {
     // exits setup loop, begins profiling
     serial_setup = false;
+    Serial.print(F("\n"));
     Serial.print(F("Beginning profiling in "));
     Serial.print(first_wait);
     Serial.print(F(" seconds ("));
     Serial.print(first_wait/60.0);
     Serial.println(F(" minutes). Current settings are:"));
     getVar("all");
+    if (!sd_works) {
+        sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
+        Serial.print(F("Since SD card failed, or not present, using default surface velocity (cm/s): "));
+        Serial.println(sur_vel/(CPCM*10));        
+    }
     Serial.println(F("Variables are saved and will remain until changed."));
     Serial.println(F("Happy profiling! :)"));
 }
@@ -684,9 +690,7 @@ void setup () {
     if (!SD.begin(SD_CHIP_SELECT)) {
         sd_works = false;
         use_tides = false;
-        sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
-        Serial.print(F("SD card failed, or not present. Using default surface velocity (cm/s): "));
-        Serial.println(sur_vel);        
+        Serial.println(F("SD card failed, or not present."));
     } else {
         Serial.println(F("SD card initialized."));
     }
@@ -729,7 +733,8 @@ void loop () {
         use_tides = false;
         sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
     }
-    if (use_tides) {
+    Serial.print(sd_works);
+    if ((use_tides) && (sd_works)) {
         // compute surface velocity based on tides if RTC and SD are working
         File tide_file = SD.open("tides.txt");
         if (tide_file) {
@@ -760,8 +765,11 @@ void loop () {
         data_file.println(now.timestamp(DateTime::TIMESTAMP_FULL));
     } 
 
-    // print tidal success and surface velocity 
-    printTidalState(data_file);
+    if (use_tides && sd_works) {
+        // print tidal success and surface velocity 
+        printTidalState(data_file);
+    }
+
 
     // get voltage supplied to arduino board
     data_file.print(F("Arduino board voltage (V): "));
