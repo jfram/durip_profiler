@@ -23,8 +23,8 @@ Serial communication consists of a *command*, a *variable*, and an optional *arg
 - Begin line with a command: 'g' to get current values or 's' to set values. Only the command 's' can include an argument.
 - Enter a space then the variable you wish to get or set. Available variables to change are:
     - 'upvel' (cm/s): The max velocity of the profiler on its upwards profile up to a set depth.
-    - 'maxsurfvel' (cm/s): The maximum velocity in of line payout after the profiler hits the surface based on set depth. Surface velocity computed from tide tables use this as the peak flood/ebb tide surface velocity.
-    - 'minsurfvel' (cm/s): The minimum velocity of line payout after the profiler hits the surface based on set depth. Surface velocity computed from tide tables use this as the slack tide value surface velocity.
+    - 'maxsurfvel' (cm/s): The maximum velocity in of line payout after the profiler hits the surface based on set depth. Surface velocity computed from tide tables uses this as the peak flood/ebb tide surface velocity.
+    - 'minsurfvel' (cm/s): The minimum velocity of line payout after the profiler hits the surface based on set depth. Surface velocity computed from tide tables uses this as the slack tide  surface velocity.
     - 'defsurfvel' (cm/s): The default surface velocity, taken as the average of maxsurfvel and minsurfvel. Cannot be set directly - must change maxsurfvel or minsurfvel to update defsurfvel.
     - 'downvel' (cm/s): The max velocity of the profiler on its downwards return.
     - 'bottvel' (cm/s): The velocity of the profiler on the final two meters of the descent.
