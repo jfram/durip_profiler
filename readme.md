@@ -31,7 +31,7 @@ Serial communication consists of a *command*, a *variable*, and an optional *arg
     - 'depth' (m): The water depth. The profiler will move up at 'upvel' for this length.
     - 'factor': The water depth is multiplied by this factor and, once an amount of line equal to 'depth' is paid out, additional line is paid out equal to depth*(factor-1) at a slower rate determined by surface velocity (for a total line payout of depth*factor). Must be greater than or equal to one. Can have one decimal place.
     - 'maxfactor': 'factor' during max tide
-    - 'minfactor': 'factor' during min tide
+    - 'minfactor': 'factor' during slack tide
     - 'surfwait' (min): The wait time at the surface after a total of depth*factor amount of line is paid out.
     - 'bottwait' (min): The wait time at the bottom. AKA, the time between profiles.
     - 'firstwait' (min): The wait time before beginning the first profile, after this setup is finished with 'exit'.
