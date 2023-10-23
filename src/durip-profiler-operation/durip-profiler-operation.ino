@@ -18,8 +18,8 @@ const long CPCM = 244;                                                  // count
 const long SLOW_DEPTH = 2;                                              // slowing down for final 2 meters on move down
 int water_depth = 25;                                                   // water depth in meters. This and other parameters are loaded from EPROM, not here.
 int depth_factor = 1*10;                                                // factor to multiply by water depth to get actual line payout, multiplied by 10 to allow for one decimal place
-int min_depth_factor = 1.0*10;                                          // factor to multiply by water depth to get actual line payout at slack tide, multiplied by 10 to allow for one decimal place
-int max_depth_factor = 1.3*10;                                          // factor to multiply by water depth to get actual line payout at max tide, multiplied by 10 to allow for one decimal place
+int min_depth_factor = 1*10;                                            // factor to multiply by water depth to get actual line payout at slack tide, multiplied by 10 to allow for one decimal place
+int max_depth_factor = 1*10;                                            // factor to multiply by water depth to get actual line payout at max tide, multiplied by 10 to allow for one decimal place
 long accel = CPCM*100/10;                                               // 1 m/s^2 accel/decel rate
 long up_vel = CPCM*100*10;                                              // 1 m/s upwards velocity
 long min_sur_vel = CPCM*100*10;                                         //
@@ -29,10 +29,10 @@ long down_vel = CPCM*25*10;                                             // 0.25 
 long bot_vel = CPCM*5*10;                                               // 0.05 m/s final down velocity
 long cur_pos = 0;                                                       // stores position when winch turns off
                                                                         //
-long inter_sur_pos = water_depth*100*CPCM;                              // move full speed up to water depth, then slow down at surface
-long sur_pos = water_depth*(depth_factor/10.0)*100*CPCM;                //
-long inter_bot_pos = -water_depth*depth_factor/10*100*CPCM+SLOW_DEPTH*100*CPCM;// move down at down_vel until reaching SLOW_DEPTH above bottom
-long bot_pos = -water_depth*depth_factor/10*100*CPCM;                   // last two meters will be descended slower
+// long inter_sur_pos = water_depth*100*CPCM;                              // move full speed up to water depth, then slow down at surface
+// long sur_pos = water_depth*(depth_factor/10.0)*100*CPCM;                //
+//  long inter_bot_pos = -water_depth*depth_factor/10*100*CPCM+SLOW_DEPTH*100*CPCM;// move down at down_vel until reaching SLOW_DEPTH above bottom
+// long bot_pos = -water_depth*depth_factor/10*100*CPCM;                   // last two meters will be descended slower
                                                                         //
 long move_status;                                                       //
 bool last_move_success = true;                                          //
@@ -52,6 +52,8 @@ const byte PIN_BRAKE = 9;                                               // toggl
 const byte PIN_MOTOR = 8;                                               // toggle the Motor
                                                                         //
 int cnt = 0;                                                            // count profiles
+int waitEveryX = 4;                                                     // how often to surfwait
+int maxProfiles = 5;
 bool sd_works = true;                                                   // enables/disables SD card
 bool rtc_works = true;                                                  // enables/disables RTC
 bool serial_setup = true;                                               // for setting up values via serial
@@ -178,7 +180,7 @@ void moveUp (File &data_file) {
     sprintf_P(cmd, PSTR("t 1\n"));                                      // initiate move
     commandWinch(cmd, data_file);                                       //
     move_time = abs(sur_pos-inter_sur_pos)/(sur_vel/(10))*1000;         // expected time to complete move the rest of the way 
-    delay(move_time+5000);                                              // add 5 seconds to make sure move is really complete
+    delay(move_time+5000);                                              // add 5 seconds to make sure move is really complete // FRAM reduced 2023-10-24
     eventStatusRegister(data_file);                                     //        
     getPosition(data_file);                                             // get final position of move, save to cur_pos
     setBotPos();                                                        // always return to original position of 0
@@ -435,7 +437,7 @@ void exit() {
     getVar("all");
     if (!sd_works) {
         sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
-        depth_factor = (int)(max_depth_factor + min_depth_factor)/2.0;
+        // depth_factor = (int)(max_depth_factor + min_depth_factor)/2.0; // 2023-10-23 FRAM this turns off the max/min factor stuff
         Serial.print(F("Since SD card failed, or not present, using default surface velocity (cm/s): "));
         Serial.println(sur_vel/(CPCM*10));
         Serial.print(F("Since SD card failed, or not present, using default depth factor: "));
@@ -480,7 +482,8 @@ void readSerialCommand () {
     } else if (strcmp(strtokIdx, "s") == 0) {
         // strtol sets val to 0 if not able to convert to long
         strtokIdx = strtok(NULL, " ");
-        if (strcmp(strtokIdx, "factor") == 0  || strcmp(strtokIdx, "maxfactor") == 0 || strcmp(strtokIdx, "minfactor") == 0) {
+     //  if (strcmp(strtokIdx, "factor") == 0  || strcmp(strtokIdx, "maxfactor") == 0 || strcmp(strtokIdx, "minfactor") == 0) {
+         if (strcmp(strtokIdx, "factor") == 0) {
             // factor is a float so deal with that (only stores first decimal place)
             double temp_val = strtod(strtok(NULL, " "), NULL);
             val = round(temp_val*10);
@@ -519,6 +522,7 @@ void saveVars() {
     EEPROM.put(RW_ADDRESS + 40, min_depth_factor);
     EEPROM.put(RW_ADDRESS + 44, max_depth_factor);
     sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
+    // FRAM 2023-10-23: this is where I'd need to change depth factor too.
 }
 
 void readVars() {
@@ -540,6 +544,7 @@ void readVars() {
     EEPROM.get(RW_ADDRESS + 40, min_depth_factor);
     EEPROM.get(RW_ADDRESS + 44, max_depth_factor);
     sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
+    // FRAM 2023-10-23: this is where I'd need to change depth factor too.
 }
 
 int findClosestTideTime (long now_time, File &tide_file) {
@@ -610,34 +615,34 @@ void getTidalState (File &tide_file) {
     if (tide_success == -1) {
         use_tides = false;
         sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
-        depth_factor = (int)(max_depth_factor + min_depth_factor)/2.0; // FRAM
+    //   depth_factor = (int)(max_depth_factor + min_depth_factor)/2.0; // FRAM 2023-10-23 turn off
     // all times are before now (also catches return 0 in case if statement in findClosest doesn't trigger)
     } else if (tide_success == -2 || tide_success == 0) {
         use_tides = false;
         sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
-        depth_factor = (int)(max_depth_factor + min_depth_factor)/2.0; // FRAM
+    //   depth_factor = (int)(max_depth_factor + min_depth_factor)/2.0; // FRAM 2023-10-23 turn off
     // incorrect tide file format
     } else if (tide_success == -3) {
         use_tides = false;
         sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
-        depth_factor = (int)(max_depth_factor + min_depth_factor)/2.0; // FRAM
+    //    depth_factor = (int)(max_depth_factor + min_depth_factor)/2.0; // FRAM 2023-10-23 turn off
     // success - compute tidal state based on linear regression between high and low tide times, using abs value function
     } else if (tide_success > 0) {
         double slope = -2.0*(double)(max_sur_vel - min_sur_vel)/(upper_tide_time - lower_tide_time);
         double peak_flow = (upper_tide_time + lower_tide_time)/2.0;
         sur_vel = slope*fabs(seconds - peak_flow) + (double)max_sur_vel;
-        slope = -2.0*(double)(max_depth_factor - min_depth_factor)/(upper_tide_time - lower_tide_time); // FRAM
-        depth_factor = (int)(slope*fabs(seconds - peak_flow)) + max_depth_factor;  // FRAM
+    //    slope = -2.0*(double)(max_depth_factor - min_depth_factor)/(upper_tide_time - lower_tide_time); // FRAM 2023-10-23 turn off
+    //    depth_factor = (int)(slope*fabs(seconds - peak_flow)) + max_depth_factor;  // FRAM 2023-10-23 turn off
     // catch any other unknown states
     } else {
         use_tides = false;
         sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
-        depth_factor = (int)(max_depth_factor + min_depth_factor)/2.0; // FRAM
+    //   depth_factor = (int)(max_depth_factor + min_depth_factor)/2.0; // FRAM 2023-10-23 turn off
     }
-    inter_bot_pos = -water_depth*(depth_factor/10.0)*100*CPCM+200*CPCM; // FRAM
-    bot_pos = -water_depth*(depth_factor/10.0)*100*CPCM; // FRAM
-    inter_sur_pos = water_depth*100*CPCM;// FRAM
-    sur_pos = water_depth*(depth_factor/10.0)*100*CPCM; // FRAM
+    // inter_bot_pos = -water_depth*(depth_factor/10.0)*100*CPCM+200*CPCM; // FRAM
+    // bot_pos = -water_depth*(depth_factor/10.0)*100*CPCM; // FRAM
+    // inter_sur_pos = water_depth*100*CPCM;// FRAM
+    // sur_pos = water_depth*(depth_factor/10.0)*100*CPCM; // FRAM
 }
 
 void printTidalState(File &data_file) {
@@ -683,9 +688,12 @@ void setup () {
 
     pinMode(PIN_BRAKE, OUTPUT);
     pinMode(PIN_MOTOR, OUTPUT);
-    // winch on during setup to ensure it is working
+    // if LOW, then winch on. HIGH is winch off. 
     digitalWrite(PIN_BRAKE, LOW);
     digitalWrite(PIN_MOTOR, LOW);
+    delay(2*1000); // Confirm winch is working
+    digitalWrite(PIN_BRAKE, HIGH);
+    digitalWrite(PIN_MOTOR, HIGH);
 
     // initialize serial ports 
     Serial.begin(9600);     // for serial with computer
@@ -706,6 +714,7 @@ void setup () {
         Serial.flush();
         rtc_works = false;
         sur_vel = (double)(max_sur_vel + min_sur_vel)/2.0; 
+        // I would need to add max/min factor stuff here FRAM 2023-10-23
         Serial.print(F("Couldn't find RTC. Using default surface velocity (cm/s): "));
         Serial.println(sur_vel);
     } else {
@@ -817,7 +826,7 @@ void loop () {
     digitalWrite(PIN_MOTOR, LOW);
     Serial.println(F("Winch on."));
     data_file.println(F("Winch on."));
-    delay(5000);
+    delay(5000); // FRAM reduced from 5000 2023-10-23
     commandWinch("\n", data_file);    
 
     // do the profile up
@@ -826,18 +835,22 @@ void loop () {
     // winch off at surface
     digitalWrite(PIN_BRAKE, HIGH);
     digitalWrite(PIN_MOTOR, HIGH);
-    Serial.println(F("Winch off."));
+    Serial.println(F("Winch off."));  
     data_file.println(F("Winch off."));
     
     // surface delay 
-    delay(sur_wait*1000);
+    if ((cnt+1) % waitEveryX == 0) {
+        delay(sur_wait*1000);
+        Serial.println(F("Telemetry attempted."));  
+        data_file.println(F("Telemetry attempted."));
+    }
 
     // winch on for down move
     digitalWrite(PIN_BRAKE, LOW);
     digitalWrite(PIN_MOTOR, LOW);
     Serial.println(F("Winch on."));
     data_file.println(F("Winch on."));
-    delay(5000);
+    delay(5000); // FRAM reduced from 5000 2023-10-23
     commandWinch("\n", data_file); 
 
     // do the move down, slowing for the last SLOW_DEPTH
@@ -865,4 +878,7 @@ void loop () {
     
     // bottom delay between profiles
     delay(bot_wait*1000);    
+    if (cnt > maxProfiles) {
+      delay(1000*60*60*24);
+    }
 }
