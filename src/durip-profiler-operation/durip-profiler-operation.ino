@@ -1,7 +1,9 @@
 /*
-  DURIP profiler operation by Andrew Scherer and Jon Fram.
+  rapid profiling system (RPS) operation by Andrew Scherer and Jon Fram.
   2023-09-26 edits from jfram begin. Mostly max/min factor related. The other 90%+ of the code is from Andrew in summer 2023.
-  Features designed based on our discussions, minimal code by jfram from spring 2023, and feedback from Rocky Geyer via jfram. 
+  Features designed based on Andrew and jfram's discussions, minimal code by jfram from spring 2023, and feedback from Rocky Geyer via jfram. 
+  Jim Lerczak, principal investigator
+  funded by the Office of Naval Research DURIP program
 */
 
 #include <RTClib.h>
