@@ -31,10 +31,10 @@ long down_vel = CPCM*25*10;                                             // 0.25 
 long bot_vel = CPCM*5*10;                                               // 0.05 m/s final down velocity
 long cur_pos = 0;                                                       // stores position when winch turns off
                                                                         //
-// long inter_sur_pos = water_depth*100*CPCM;                              // move full speed up to water depth, then slow down at surface
-// long sur_pos = water_depth*(depth_factor/10.0)*100*CPCM;                //
-//  long inter_bot_pos = -water_depth*depth_factor/10*100*CPCM+SLOW_DEPTH*100*CPCM;// move down at down_vel until reaching SLOW_DEPTH above bottom
-// long bot_pos = -water_depth*depth_factor/10*100*CPCM;                   // last two meters will be descended slower
+long inter_sur_pos = water_depth*100*CPCM;                              // move full speed up to water depth, then slow down at surface
+long sur_pos = water_depth*(depth_factor/10.0)*100*CPCM;                //
+long inter_bot_pos = -water_depth*depth_factor/10*100*CPCM+SLOW_DEPTH*100*CPCM;// move down at down_vel until reaching SLOW_DEPTH above bottom
+long bot_pos = -water_depth*depth_factor/10*100*CPCM;                   // last two meters will be descended slower
                                                                         //
 long move_status;                                                       //
 bool last_move_success = true;                                          //
@@ -55,7 +55,9 @@ const byte PIN_MOTOR = 8;                                               // toggl
                                                                         //
 int cnt = 0;                                                            // count profiles
 int waitEveryX = 4;                                                     // how often to surfwait
-int maxProfiles = 5;
+int maxProfiles = 30;                                                   // When to stop profiling
+int startlengthen = 12;                                                 // add 1m to the depth of each profile
+int startshorten  = 24;                                                 // stop adding 1m to the depth of each profile 
 bool sd_works = true;                                                   // enables/disables SD card
 bool rtc_works = true;                                                  // enables/disables RTC
 bool serial_setup = true;                                               // for setting up values via serial
@@ -64,7 +66,7 @@ const bool RTC_SYNC = false;                                            // set t
 const byte SD_CHIP_SELECT = 53;                                         // SD card chip select pin
 const int RW_ADDRESS = 0;                                               // address to read/write user modifiable vars to eeprom
                                                                         //
-bool use_tides = true;                                                  // variable to store tidal lookup success/failure
+bool use_tides = false;                                                 // variable to store tidal lookup success/failure
 File tide_file;                                                         // file that will open tides.txt from SD card
 int searchidx = 0;                                                      // search index that stores line of previously found tide time
 double lower_tide_time;                                                 // high/low tide just before now
@@ -206,7 +208,7 @@ void moveDown (File &data_file) {
     sprintf_P(cmd, PSTR("t 1\n"));                                      // initiate move
     commandWinch(cmd, data_file);                                       //
     long move_time = abs(inter_bot_pos)/(down_vel/(10))*1000;           // expected time to complete move down 
-    delay(move_time-2000);                                              //
+    delay(move_time+2000);                                              // FRAM. Give it more time to get where it needs to go. Was -2000. 
     eventStatusRegister(data_file);                                     //
     // slow down in final 2 meters
     sprintf_P(cmd, PSTR("s r0xcb %ld\n"), bot_vel);                     // set max velocity
@@ -691,8 +693,8 @@ void setup () {
     pinMode(PIN_BRAKE, OUTPUT);
     pinMode(PIN_MOTOR, OUTPUT);
     // if LOW, then winch on. HIGH is winch off. 
-    digitalWrite(PIN_BRAKE, LOW);
     digitalWrite(PIN_MOTOR, LOW);
+    digitalWrite(PIN_BRAKE, LOW);
     delay(2*1000); // Confirm winch is working
     digitalWrite(PIN_BRAKE, HIGH);
     digitalWrite(PIN_MOTOR, HIGH);
@@ -824,11 +826,11 @@ void loop () {
     data_file.println(readVcc());
 
     // power winch motor and brake
-    digitalWrite(PIN_BRAKE, LOW);
     digitalWrite(PIN_MOTOR, LOW);
+    digitalWrite(PIN_BRAKE, LOW);
     Serial.println(F("Winch on."));
     data_file.println(F("Winch on."));
-    delay(5000); // FRAM reduced from 5000 2023-10-23
+    delay(5*1000); // FRAM reduced from 5000 2023-10-23
     commandWinch("\n", data_file);    
 
     // do the profile up
@@ -841,15 +843,16 @@ void loop () {
     data_file.println(F("Winch off."));
     
     // surface delay 
-    if ((cnt+1) % waitEveryX == 0) {
+    delay(15*1000); // FRAM 2023-10-23
+    if ((1+cnt) % waitEveryX == 0) {
         delay(sur_wait*1000);
         Serial.println(F("Telemetry attempted."));  
         data_file.println(F("Telemetry attempted."));
     }
 
     // winch on for down move
-    digitalWrite(PIN_BRAKE, LOW);
     digitalWrite(PIN_MOTOR, LOW);
+    digitalWrite(PIN_BRAKE, LOW);
     Serial.println(F("Winch on."));
     data_file.println(F("Winch on."));
     delay(5000); // FRAM reduced from 5000 2023-10-23
@@ -877,10 +880,29 @@ void loop () {
 
     // reset use tides to try again next loop
     use_tides = true; 
-    
+
+    // setVar("depth",water_depth*(1.0+0.1)); // FRAM 2023-10-25 This had no effect
+    // startlengthen;                                                 // add 1m to the depth to each profile
+    // startshorten  ;                                                // subtract 1m from the depth of each profile 
+    if (cnt >= startlengthen) {
+      water_depth = water_depth+1;
+      inter_bot_pos = -water_depth*depth_factor/10L*100L*CPCM+200L*CPCM;
+      bot_pos = -water_depth*depth_factor/10L*100L*CPCM;
+      inter_sur_pos = water_depth*100L*CPCM;
+      sur_pos = water_depth*depth_factor/10L*100L*CPCM;
+    }
+    if (cnt >= startshorten) {
+      water_depth = water_depth-1;
+      inter_bot_pos = -water_depth*depth_factor/10L*100L*CPCM+200L*CPCM;
+      bot_pos = -water_depth*depth_factor/10L*100L*CPCM;
+      inter_sur_pos = water_depth*100L*CPCM;
+      sur_pos = water_depth*depth_factor/10L*100L*CPCM;
+    }
     // bottom delay between profiles
     delay(bot_wait*1000);    
-    if (cnt > maxProfiles) {
-      delay(1000*60*60*24);
+    if (cnt >= maxProfiles) {
+      for (int i=1;i<3600;i++){
+        delay(24000);
+      }
     }
 }
